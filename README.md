@@ -84,15 +84,12 @@ tests/services/test_manifest_service.py:
 
 ```python
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from app.services.manifest_service import ManifestService
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SOURCE_APPL = {
     "providingParty": "gbm",
@@ -207,30 +204,55 @@ def test_create_fircosoft_manifest_for_file_preserves_field_order(tmp_path):
     ]
 
 
-def test_create_fircosoft_manifest_for_file_matches_real_sample_formatting(
-    tmp_path,
-):
-    """Byte-for-byte regression against sample_edl_mark.csv.mrk (repo root) -
-    the real reference file the Fircosoft ingestion team gave as feedback.
-    4-space indent, no space before "{"/"[", sourceFiles' one-object array
-    collapsed onto the opening line with its closing brace outdented to
-    match - none of this is producible via json.dumps(indent=N), so this
-    guards against silently drifting back to standard pretty-printing."""
-    sample_text = (REPO_ROOT / "sample_edl_mark.csv.mrk").read_text()
+def test_create_fircosoft_manifest_for_file_matches_expected_formatting(tmp_path):
+    """Exact format Fircosoft's ingestion team confirmed correct (feedback
+    2026-10-20) - 4-space indent, no space before "{"/"[", sourceFiles' one-
+    object array collapsed onto its opening line with the closing brace
+    outdented to match. None of this is producible via json.dumps(indent=N),
+    so this guards against silently drifting back to standard pretty-printing.
+    Expected text is inlined here rather than loaded from a reference file -
+    the one used to originally confirm this (sample_edl_mark.csv.mrk) isn't
+    meant to stay in the repo long-term."""
+    csv_path = _csv(tmp_path, ["1,Acme Corp", "2,Beta Inc"])
 
-    csv_path = _csv(tmp_path, ["1,Acme Corp"])
     marker_path = ManifestService.create_fircosoft_manifest_for_file(
         csv_path, SOURCE_APPL, SOURCE_FILE_STATIC
     )
-    generated_text = marker_path.read_text()
 
-    def normalize(text):
-        text = re.sub(r'"buste": "\d{8}"', '"buste": "DATE"', text)
-        text = re.sub(r'"recordCount": "\d+"', '"recordCount": "N"', text)
-        text = re.sub(r'"dataFileURI": "[^"]+"', '"dataFileURI": "URI"', text)
-        return text
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    expected = (
+        "{\n"
+        '    "specVersion": "2.0",\n'
+        '    "sourceAppl":{\n'
+        '        "providingParty": "gbm",\n'
+        '        "country": "can",\n'
+        '        "region": "nam",\n'
+        '        "appAcronym": "b8fb",\n'
+        '        "frequency": "dly",\n'
+        '        "securityClassification": "cpi",\n'
+        '        "operation": "f",\n'
+        '        "ingestionFramework": "y",\n'
+        '        "fileTransfer": "push",\n'
+        f'        "buste": "{today}"\n'
+        "    },\n"
+        '    "sourceFiles":[{\n'
+        '            "dataRention": "",\n'
+        '            "compressType": "",\n'
+        '            "ingestMetadata": "Fircosoft_EDL_Metadata_V8.xml",\n'
+        '            "fileCompressed": "n",\n'
+        '            "toCharSet": "",\n'
+        '            "recordCount": "2",\n'
+        '            "dataFileMD5": "",\n'
+        '            "fromCharSet": "",\n'
+        '            "invalidRecordThreshold": "0",\n'
+        '            "fileExtension": "csv",\n'
+        '            "dataFileURI": "Fircosoft_Fcore_EDL_Data_20261008.csv",\n'
+        '            "charSetConv": "n"\n'
+        "    }]\n"
+        "}\n"
+    )
 
-    assert normalize(generated_text) == normalize(sample_text)
+    assert marker_path.read_text() == expected
 
 
 def test_create_fircosoft_manifest_for_file_raises_when_source_missing():
@@ -248,5 +270,4 @@ def test_create_fircosoft_manifest_for_file_returns_mrk_path(tmp_path):
     )
 
     assert marker_path.name == "Fircosoft_Fcore_EDL_Data_20261008.csv.mrk"
-
 ```
