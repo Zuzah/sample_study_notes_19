@@ -79,3 +79,174 @@ class ManifestService:
         return manifest_path
 
 ```
+
+tests/services/test_manifest_service.py:
+
+```python
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from app.services.manifest_service import ManifestService
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+SOURCE_APPL = {
+    "providingParty": "gbm",
+    "country": "can",
+    "region": "nam",
+    "appAcronym": "b8fb",
+    "frequency": "dly",
+    "securityClassification": "cpi",
+    "operation": "f",
+    "ingestionFramework": "y",
+    "fileTransfer": "push",
+}
+SOURCE_FILE_STATIC = {
+    "dataRention": "",
+    "compressType": "",
+    "ingestMetadata": "Fircosoft_EDL_Metadata_V8.xml",
+    "fileCompressed": "n",
+    "toCharSet": "",
+    "recordCount": "",
+    "dataFileMD5": "",
+    "fromCharSet": "",
+    "invalidRecordThreshold": "0",
+    "fileExtension": "csv",
+    "dataFileURI": "",
+    "charSetConv": "n",
+}
+
+
+def _csv(tmp_path, rows):
+    path = tmp_path / "Fircosoft_Fcore_EDL_Data_20261008.csv"
+    lines = ["Fenergo ID,Legal Entity Name"] + rows
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_create_fircosoft_manifest_for_file_builds_correct_json(tmp_path):
+    csv_path = _csv(tmp_path, ["1,Acme Corp", "2,Beta Inc", "3,Gamma LLC"])
+
+    marker_path = ManifestService.create_fircosoft_manifest_for_file(
+        csv_path, SOURCE_APPL, SOURCE_FILE_STATIC
+    )
+
+    manifest = json.loads(marker_path.read_text())
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+    assert manifest["specVersion"] == "2.0"
+    assert manifest["sourceAppl"]["buste"] == today
+    assert manifest["sourceAppl"]["providingParty"] == "gbm"
+    assert manifest["sourceAppl"]["appAcronym"] == "b8fb"
+    source_file = manifest["sourceFiles"][0]
+    assert source_file["recordCount"] == "3"
+    assert source_file["dataFileURI"] == "Fircosoft_Fcore_EDL_Data_20261008.csv"
+    assert source_file["ingestMetadata"] == "Fircosoft_EDL_Metadata_V8.xml"
+    assert source_file["fileExtension"] == "csv"
+
+
+def test_create_fircosoft_manifest_for_file_counts_only_data_rows_not_header(
+    tmp_path,
+):
+    csv_path = _csv(tmp_path, ["1,Acme Corp"])
+
+    marker_path = ManifestService.create_fircosoft_manifest_for_file(
+        csv_path, SOURCE_APPL, SOURCE_FILE_STATIC
+    )
+
+    manifest = json.loads(marker_path.read_text())
+    assert manifest["sourceFiles"][0]["recordCount"] == "1"
+
+
+def test_create_fircosoft_manifest_for_file_dataFileURI_matches_real_filename(
+    tmp_path,
+):
+    """dataFileURI must always equal the real delivered filename - never an
+    independently-templated string that could drift from what's actually sent."""
+    csv_path = tmp_path / "some_other_name.csv"
+    csv_path.write_text("Fenergo ID\n1\n")
+
+    marker_path = ManifestService.create_fircosoft_manifest_for_file(
+        csv_path, SOURCE_APPL, SOURCE_FILE_STATIC
+    )
+
+    manifest = json.loads(marker_path.read_text())
+    assert manifest["sourceFiles"][0]["dataFileURI"] == "some_other_name.csv"
+
+
+def test_create_fircosoft_manifest_for_file_preserves_field_order(tmp_path):
+    """recordCount/dataFileURI land at whatever position SOURCE_FILE_STATIC
+    declares them at (toCharSet->recordCount, fileExtension->dataFileURI->
+    charSetConv), matching the real sample manifest byte for byte - not
+    appended at the end."""
+    csv_path = _csv(tmp_path, ["1,Acme Corp"])
+
+    marker_path = ManifestService.create_fircosoft_manifest_for_file(
+        csv_path, SOURCE_APPL, SOURCE_FILE_STATIC
+    )
+
+    manifest = json.loads(marker_path.read_text())
+    keys = list(manifest["sourceFiles"][0].keys())
+    assert keys == [
+        "dataRention",
+        "compressType",
+        "ingestMetadata",
+        "fileCompressed",
+        "toCharSet",
+        "recordCount",
+        "dataFileMD5",
+        "fromCharSet",
+        "invalidRecordThreshold",
+        "fileExtension",
+        "dataFileURI",
+        "charSetConv",
+    ]
+
+
+def test_create_fircosoft_manifest_for_file_matches_real_sample_formatting(
+    tmp_path,
+):
+    """Byte-for-byte regression against sample_edl_mark.csv.mrk (repo root) -
+    the real reference file the Fircosoft ingestion team gave as feedback.
+    4-space indent, no space before "{"/"[", sourceFiles' one-object array
+    collapsed onto the opening line with its closing brace outdented to
+    match - none of this is producible via json.dumps(indent=N), so this
+    guards against silently drifting back to standard pretty-printing."""
+    sample_text = (REPO_ROOT / "sample_edl_mark.csv.mrk").read_text()
+
+    csv_path = _csv(tmp_path, ["1,Acme Corp"])
+    marker_path = ManifestService.create_fircosoft_manifest_for_file(
+        csv_path, SOURCE_APPL, SOURCE_FILE_STATIC
+    )
+    generated_text = marker_path.read_text()
+
+    def normalize(text):
+        text = re.sub(r'"buste": "\d{8}"', '"buste": "DATE"', text)
+        text = re.sub(r'"recordCount": "\d+"', '"recordCount": "N"', text)
+        text = re.sub(r'"dataFileURI": "[^"]+"', '"dataFileURI": "URI"', text)
+        return text
+
+    assert normalize(generated_text) == normalize(sample_text)
+
+
+def test_create_fircosoft_manifest_for_file_raises_when_source_missing():
+    with pytest.raises(FileNotFoundError):
+        ManifestService.create_fircosoft_manifest_for_file(
+            Path("/tmp/does_not_exist_edl.csv"), SOURCE_APPL, SOURCE_FILE_STATIC
+        )
+
+
+def test_create_fircosoft_manifest_for_file_returns_mrk_path(tmp_path):
+    csv_path = _csv(tmp_path, ["1,Acme Corp"])
+
+    marker_path = ManifestService.create_fircosoft_manifest_for_file(
+        csv_path, SOURCE_APPL, SOURCE_FILE_STATIC
+    )
+
+    assert marker_path.name == "Fircosoft_Fcore_EDL_Data_20261008.csv.mrk"
+
+```
