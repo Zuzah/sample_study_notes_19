@@ -555,6 +555,7 @@ from app.services.report_definition_service import (
     ReportDefinition,
     ReportDefinitionService,
 )
+from app.services.sftp_connection_service import SFTPConnectionService
 
 
 def test_get_returns_known_report_definition():
@@ -749,64 +750,62 @@ def test_get_returns_edl_report_definition():
     assert definition.manifest_source_file_static["fileExtension"] == "csv"
 
 
-def test_get_returns_ccd_report_definition():
-    definition = ReportDefinitionService.get("CCD")
-    assert definition == ReportDefinition(
-        sql_file="CCD.sql",
-        template_file="CCD.xml",
-        archive_path="CCD",
+# Reports whose SFTP destination isn't finalized yet (may end up on RegCentral,
+# ClientCentralData, or a not-yet-registered connection). Pin everything stable,
+# but only require sftp_connection to be unset or a registered connection.
+@pytest.mark.parametrize(
+    "report_name, sql_file, template_file, archive_path",
+    [
+        ("CCD", "CCD.sql", "CCD.xml", "CCD"),
+        ("CCD_Email", "CCD_Email.sql", "CCD_Email.xml", "EmailFenergoCCD"),
+        (
+            "Fenergo_RegCentral_EUEMIRExtract",
+            "Fenergo_RegCentral_EUEMIRExtract.sql",
+            "Fenergo_RegCentral_EUEMIRExtract.xml",
+            "RegCentral_EUEMIRTracker",
+        ),
+        (
+            "Fenergo_RegCentral_UKEMIRExtract",
+            "Fenergo_RegCentral_UKEMIRExtract.sql",
+            "Fenergo_RegCentral_UKEMIRExtract.xml",
+            "RegCentral_UKEMIRTracker",
+        ),
+        (
+            "Fenergo_RegCentral",
+            "Fenergo_RegCentral.sql",
+            "Fenergo_RegCentral.xml",
+            "RegCentral",
+        ),
+        (
+            "RegCentral_MiFID",
+            "RegCentral_MiFID.sql",
+            "RegCentral_MiFID.xml",
+            "RegCentral_MiFID",
+        ),
+    ],
+)
+def test_get_returns_report_definition_with_pending_sftp_connection(
+    report_name, sql_file, template_file, archive_path
+):
+    definition = ReportDefinitionService.get(report_name)
+    assert definition.sql_file == sql_file
+    assert definition.template_file == template_file
+    assert definition.archive_path == archive_path
+    assert definition.saved_query_id is None
+    assert definition.generate_marker is True
+    assert definition.marker_type == "sha256"
+    assert (
+        definition.sftp_connection is None
+        or definition.sftp_connection in SFTPConnectionService._registry
     )
-    assert definition.sftp_connection is None
 
 
-def test_get_returns_ccd_email_report_definition():
-    definition = ReportDefinitionService.get("CCD_Email")
-    assert definition == ReportDefinition(
-        sql_file="CCD_Email.sql",
-        template_file="CCD_Email.xml",
-        archive_path="EmailFenergoCCD",
-    )
-    assert definition.sftp_connection is None
-
-
-def test_get_returns_fenergo_regcentral_euemirextract_report_definition():
-    definition = ReportDefinitionService.get("Fenergo_RegCentral_EUEMIRExtract")
-    assert definition == ReportDefinition(
-        sql_file="Fenergo_RegCentral_EUEMIRExtract.sql",
-        template_file="Fenergo_RegCentral_EUEMIRExtract.xml",
-        archive_path="RegCentral_EUEMIRTracker",
-        sftp_connection="RegCentral",
-    )
-
-
-def test_get_returns_fenergo_regcentral_ukemirextract_report_definition():
-    definition = ReportDefinitionService.get("Fenergo_RegCentral_UKEMIRExtract")
-    assert definition == ReportDefinition(
-        sql_file="Fenergo_RegCentral_UKEMIRExtract.sql",
-        template_file="Fenergo_RegCentral_UKEMIRExtract.xml",
-        archive_path="RegCentral_UKEMIRTracker",
-        sftp_connection="RegCentral",
-    )
-
-
-def test_get_returns_fenergo_regcentral_report_definition():
-    definition = ReportDefinitionService.get("Fenergo_RegCentral")
-    assert definition == ReportDefinition(
-        sql_file="Fenergo_RegCentral.sql",
-        template_file="Fenergo_RegCentral.xml",
-        archive_path="RegCentral",
-        sftp_connection="RegCentral",
-    )
-
-
-def test_get_returns_regcentral_mifid_report_definition():
-    definition = ReportDefinitionService.get("RegCentral_MiFID")
-    assert definition == ReportDefinition(
-        sql_file="RegCentral_MiFID.sql",
-        template_file="RegCentral_MiFID.xml",
-        archive_path="RegCentral_MiFID",
-        sftp_connection="RegCentral",
-    )
+@pytest.mark.parametrize("report_name", sorted(ReportDefinitionService._registry))
+def test_every_report_sftp_connection_is_unset_or_registered(report_name):
+    """Catches a typo'd/unregistered SFTP_CONNECTION in any report_definitions/
+    file - unset is allowed (falls back to the legacy global SFTP_* settings)."""
+    connection = ReportDefinitionService.get(report_name).sftp_connection
+    assert connection is None or connection in SFTPConnectionService._registry
 
 
 def test_sql_file_path_raises_clearly_for_saved_query_based_report(monkeypatch):
@@ -823,6 +822,7 @@ def test_sql_file_path_raises_clearly_for_saved_query_based_report(monkeypatch):
 
     with pytest.raises(ValueError):
         ReportDefinitionService.sql_file_path("SavedQueryTestReport")
+
 
 ```
 
