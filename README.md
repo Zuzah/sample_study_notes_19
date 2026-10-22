@@ -826,5 +826,39 @@ def test_sql_file_path_raises_clearly_for_saved_query_based_report(monkeypatch):
 
 ```
 
+And delta
 
+```python
+
+from report_definitions import (
+    cander_report,
+    ccd_email_report,
+    ccd_report,
+    china_gtt_report,
+    edl_report,
+    fenergo_regcentral_euemirextract_report,
+    fenergo_regcentral_report,
+    fenergo_regcentral_ukemirextract_report,
+    product_report,
+    regcentral_mifid_report,
+    singapore_report,
+    uk_product_report,
+)
+
+        for module in (
+            cander_report,
+            ccd_email_report,
+            ccd_report,
+            china_gtt_report,
+            edl_report,
+            fenergo_regcentral_euemirextract_report,
+            fenergo_regcentral_report,
+            fenergo_regcentral_ukemirextract_report,
+            product_report,
+            regcentral_mifid_report,
+            singapore_report,
+            uk_product_report,
+        )
+
+```
 
